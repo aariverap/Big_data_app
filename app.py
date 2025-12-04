@@ -462,74 +462,7 @@ def cargar_documentos_elastic():
             return jsonify({'success': False, 'error': 'No autorizado'}), 401
         
         permisos = session.get('permisos', {})
-        if not permisos.get('admin_data_elastic'):
-            return jsonify({'success': False, 'error': 'No tiene permisos para cargar datos'}), 403
-        
-        data = request.get_json()
-        archivos = data.get('archivos', [])
-        index = data.get('index')
-        metodo = data.get('metodo', 'zip')
-        
-        if not archivos or not index:
-            return jsonify({'success': False, 'error': 'Archivos e índice son requeridos'}), 400
-        
-        documentos = []
-        
-        if metodo == 'zip':
-            # Cargar archivos JSON directamente
-            for archivo in archivos:
-                ruta = archivo.get('ruta')
-                print(f"Procesando archivo JSON: {ruta}")
-                if ruta and os.path.exists(ruta):
-                    doc = Funciones.leer_json(ruta)
-                    print(doc)
-                    if doc:
-                        documentos.append(doc)
-        
-        elif metodo == 'webscraping':
-            # Procesar archivos con PLN
-            #pln = PLN(cargar_modelos=True)
-            
-            for archivo in archivos:
-                ruta = archivo.get('ruta')
-                if not ruta or not os.path.exists(ruta):
-                    continue
-                
-                extension = archivo.get('extension', '').lower()
-                
-                # Extraer texto según tipo de archivo
-                texto = ""
-                if extension == 'pdf':
-                    # Intentar extracción normal
-                    texto = Funciones.extraer_texto_pdf(ruta)
-                    
-                    # Si no se extrajo texto, intentar con OCR
-                    if not texto or len(texto.strip()) < 100:
-                        try:
-                            texto = Funciones.extraer_texto_pdf_ocr(ruta)
-                        except:
-                            pass
-                
-                elif extension == 'txt':
-                    try:
-                        with open(ruta, 'r', encoding='utf-8') as f:
-                            texto = f.read()
-                    except:
-                        try:
-                            with open(ruta, 'r', encoding='latin-1') as f:
-                                texto = f.read()
-                        except:
-                            pass
-                
-                if not texto or len(texto.strip()) < 50:
-                    continue
-                
-                # Procesar con PLN
-                try:
-                    #resumen = pln.generar_resumen(texto, num_oraciones=3)
-                    #entidades = pln.extraer_entidades(texto)
-                    #temas = pln.extraer_temas(texto, top_n=10)
-
+      
                     resumen = ""            #borrar en produccion
                     entidades = ""          #borrar en produccion
                     temas = ""              #borrar en produccion
