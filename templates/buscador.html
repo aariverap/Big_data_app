@@ -118,11 +118,7 @@
                         <!-- Columna 1: Aggregations (20%) -->
                         <div class="col-md-3">
                             <div class="aggs-list">
-<<<<<<< HEAD
                                 <h6 class="mb-3">Filtros</h6>
-=======
-                                <h6 class="mb-3">Agregaciones</h6>
->>>>>>> origin/main
                                 <div id="divAggregations">
                                     <!-- Las aggregations se mostrarán aquí -->
                                 </div>
@@ -136,17 +132,10 @@
                                     <thead class="table-dark">
                                         <tr>
                                             <th style="width: 5%;">#</th>
-<<<<<<< HEAD
                                             <th style="width: 10%;">Id</th>
                                             <th style="width: 10%;">Score</th>
                                             <th style="width: 10%;">Index</th>
                                             <th style="width: 75%;">Contenido</th>
-=======
-                                            <th style="width: 10%;">ID</th>
-                                            <th style="width: 10%;">Score</th>
-                                            <th style="width: 15%;">Índice</th>
-                                            <th style="width: 60%;">Contenido</th>
->>>>>>> origin/main
                                         </tr>
                                     </thead>
                                     <tbody id="tablaResultados">
@@ -229,13 +218,8 @@
             // Mostrar aggregations
             mostrarAggregations(data.aggs || {});
             
-<<<<<<< HEAD
             // Mostrar hits-resultados
             mostrarHits(data.resultados || []);
-=======
-            // Mostrar hits
-            mostrarHits(data.hits || []);
->>>>>>> origin/main
             
             // Mostrar div de resultados
             document.getElementById('divResultados').style.display = 'block';
@@ -284,7 +268,6 @@
         }
 
         // Función para mostrar hits
-<<<<<<< HEAD
         function mostrarHits(resultados) {
             console.log(resultados);
             const tablaResultados = document.getElementById('tablaResultados');
@@ -298,20 +281,6 @@
             resultados.forEach((resultado, index) => {
                 const row = document.createElement('tr');
                 const source = resultado._source || {};
-=======
-        function mostrarHits(hits) {
-            const tablaResultados = document.getElementById('tablaResultados');
-            tablaResultados.innerHTML = '';
-            
-            if (hits.length === 0) {
-                tablaResultados.innerHTML = '<tr><td colspan="5" class="text-center">No se encontraron resultados</td></tr>';
-                return;
-            }
-            
-            hits.forEach((hit, index) => {
-                const row = document.createElement('tr');
-                const source = hit._source || {};
->>>>>>> origin/main
                 
                 // Crear vista del contenido (primeros 200 caracteres)
                 let contenidoVista = '';
