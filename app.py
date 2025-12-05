@@ -57,15 +57,17 @@ def buscador():
 def buscar_elastic(): 
     """API para realizar búsqueda en ElasticSearch"""
     try:
+        # Verificar que elastic esté configurado
         if not elastic:
             return jsonify({
                 'success': False,
                 'error': 'ElasticSearch no está configurado'
             }), 503
+        
         data = request.get_json()
         texto_buscar = data.get('texto', '').strip()
-        #campo = data.get('campo', '_all') # _opciones (traidos de un select del formulario): titulo, contenido, autor, fecha_creacion
-        campo = 'texto'
+        campo = data.get('campo', 'texto')  # Campo por defecto: texto
+        index = data.get('index', ELASTIC_INDEX_DEFAULT)
         
         if not texto_buscar:
             return jsonify({
@@ -73,23 +75,29 @@ def buscar_elastic():
                 'error': 'Texto de búsqueda es requerido'
             }), 400
         
-        # Definir aggregations/filtros
-        query_base= {"query": {
-                            "match": {
-                                campo: texto_buscar
-                            }
-                        } 
+        # Construir query base (búsqueda por texto)
+        query_base = {
+            "query": {
+                "match": {
+                    campo: {
+                        "query": texto_buscar,
+                        "operator": "or"  # Busca cualquiera de las palabras
                     }
-        aggs= {
-            "cuentos_por_mes": {
-                "date_histogram": {
-                    "field": "fecha_creacion",
-                    "calendar_interval": "month"
+                }
+            }
+        }
+        
+        # Definir agregaciones/filtros opcionales
+        aggs = {
+            "documentos_por_corporacion": {
+                "terms": {
+                    "field": "corporacion",
+                    "size": 10
                 }
             },
-            "cuentos_por_autor": {
+            "documentos_por_año": {
                 "terms": {
-                    "field": "autor",
+                    "field": "año",
                     "size": 10
                 }
             }
@@ -97,12 +105,11 @@ def buscar_elastic():
         
         # Ejecutar búsqueda sobre elastic
         resultado = elastic.buscar(
-            index=ELASTIC_INDEX_DEFAULT,
+            index=index,
             query=query_base,
             aggs=aggs,            
             size=100
         )
-        #print(resultado) 
         
         return jsonify(resultado)
         
@@ -111,6 +118,8 @@ def buscar_elastic():
             'success': False,
             'error': str(e)
         }), 500
+
+
 #--------------rutas del buscador en elastic-fin-------------
 #--------------rutas de mongodb (usuarios)-inicio-------------
 @app.route('/login', methods=['GET', 'POST'])
@@ -298,16 +307,33 @@ def listar_indices_elastic():
     """API para listar índices de ElasticSearch"""
     try:
         if not session.get('logged_in'):
-            return jsonify({'error': 'No autorizado'}), 401
+            return jsonify({'success': False, 'error': 'No autorizado'}), 401
         
         permisos = session.get('permisos', {})
         if not permisos.get('admin_elastic'):
-            return jsonify({'error': 'No tiene permisos para gestionar ElasticSearch'}), 403
+            return jsonify({'success': False, 'error': 'No tiene permisos para gestionar ElasticSearch'}), 403
         
-        indices = elastic.listar_indices()
-        return jsonify(indices)
+        # Verificar que elastic esté inicializado
+        if not elastic:
+            return jsonify({
+                'success': False,
+                'error': 'ElasticSearch no está configurado',
+                'indices': []
+            })
+        
+        # Intentar listar índices
+        resultado = elastic.listar_indices()
+        
+        return jsonify(resultado)
+        
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'indices': []
+        }), 500
     
 @app.route('/ejecutar-query-elastic', methods=['POST'])
 def ejecutar_query_elastic():
@@ -360,7 +386,8 @@ def procesar_webscraping_elastic():
         url = data.get('url')
         extensiones_navegar = data.get('extensiones_navegar', 'aspx')
         tipos_archivos = data.get('tipos_archivos', 'pdf')
-        index = data.get('index')
+        index = data.get('index') or ELASTIC_INDEX_DEFAULT
+
         
         if not url:
             return jsonify({'success': False, 'error': 'La URL es requerida'}), 400
@@ -414,9 +441,14 @@ def procesar_webscraping_elastic():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+   
+# Archivo: app.py
+
+# ... (código anterior a la función) ...
+
 @app.route('/procesar-zip-elastic', methods=['POST'])
 def procesar_zip_elastic():
-    """API para procesar archivo ZIP con archivos JSON"""
+    """API para procesar archivo ZIP con archivos JSON (Búsqueda Recursiva)"""
     try:
         if not session.get('logged_in'):
             return jsonify({'success': False, 'error': 'No autorizado'}), 401
@@ -434,12 +466,11 @@ def procesar_zip_elastic():
         if not file.filename:
             return jsonify({'success': False, 'error': 'Archivo no válido'}), 400
         
-        if not index:
-            return jsonify({'success': False, 'error': 'Índice no especificado'}), 400
-        
         # Guardar archivo ZIP temporalmente
         filename = secure_filename(file.filename)
         carpeta_upload = 'static/uploads'
+        
+        # Limpiar carpeta antes de nueva carga para evitar mezclar archivos
         Funciones.crear_carpeta(carpeta_upload)
         Funciones.borrar_contenido_carpeta(carpeta_upload)
         
@@ -448,23 +479,56 @@ def procesar_zip_elastic():
         print(f"Archivo ZIP guardado en: {zip_path}")
         
         # Descomprimir ZIP
-        archivos = Funciones.descomprimir_zip_local(zip_path, carpeta_upload)
+        Funciones.descomprimir_zip_local(zip_path, carpeta_upload)
         
-        # Eliminar archivo ZIP
-        os.remove(zip_path)
+        # Eliminar archivo ZIP original para no procesarlo
+        try:
+            os.remove(zip_path)
+        except:
+            pass
         
-        # Listar archivos JSON
-        archivos_json = Funciones.listar_archivos_json(carpeta_upload)
+        # --- CORRECCIÓN: Búsqueda Recursiva de JSONs ---
+        archivos_json = []
         
+        # Recorrer todo el árbol de directorios de uploads (incluye subcarpetas)
+        for root, dirs, files in os.walk(carpeta_upload):
+            for nombre_archivo in files:
+                if nombre_archivo.lower().endswith('.json'):
+                    ruta_completa = os.path.join(root, nombre_archivo)
+                    
+                    # Obtener tamaño
+                    try:
+                        tamaño = os.path.getsize(ruta_completa)
+                    except:
+                        tamaño = 0
+                        
+                    archivos_json.append({
+                        'nombre': nombre_archivo,
+                        'ruta': ruta_completa,
+                        'extension': 'json',
+                        'tamaño': tamaño
+                    })
+        
+        print(f"Archivos encontrados: {len(archivos_json)}")
+        
+        if len(archivos_json) == 0:
+            return jsonify({
+                'success': False, 
+                'error': 'El ZIP se descomprimió pero no se encontraron archivos .json en su interior (revisar subcarpetas).'
+            })
+
         return jsonify({
             'success': True,
             'archivos': archivos_json,
-            'mensaje': f'Se encontraron {len(archivos_json)} archivos JSON'
+            'mensaje': f'Se encontraron {len(archivos_json)} archivos JSON listos para cargar.'
         })
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
-    
+
+
 @app.route('/cargar-documentos-elastic', methods=['POST'])
 def cargar_documentos_elastic():
     """API para cargar documentos a ElasticSearch"""
@@ -493,14 +557,11 @@ def cargar_documentos_elastic():
                 print(f"Procesando archivo JSON: {ruta}")
                 if ruta and os.path.exists(ruta):
                     doc = Funciones.leer_json(ruta)
-                    print(doc)
                     if doc:
                         documentos.append(doc)
         
         elif metodo == 'webscraping':
-            # Procesar archivos con PLN
-            #pln = PLN(cargar_modelos=True)
-            
+            # Procesar archivos (sin PLN por ahora)
             for archivo in archivos:
                 ruta = archivo.get('ruta')
                 if not ruta or not os.path.exists(ruta):
@@ -511,7 +572,6 @@ def cargar_documentos_elastic():
                 # Extraer texto según tipo de archivo
                 texto = ""
                 if extension == 'pdf':
-                    # Intentar extracción normal
                     texto = Funciones.extraer_texto_pdf(ruta)
                     
                     # Si no se extrajo texto, intentar con OCR
@@ -535,34 +595,15 @@ def cargar_documentos_elastic():
                 if not texto or len(texto.strip()) < 50:
                     continue
                 
-                # Procesar con PLN
-                try:
-                    #resumen = pln.generar_resumen(texto, num_oraciones=3)
-                    #entidades = pln.extraer_entidades(texto)
-                    #temas = pln.extraer_temas(texto, top_n=10)
-
-                    resumen = ""            #borrar en produccion
-                    entidades = ""          #borrar en produccion
-                    temas = ""              #borrar en produccion
-                    
-                    # Crear documento
-                    documento = {
-                        'texto': texto,
-                        'fecha': datetime.now().isoformat(),
-                        'ruta': ruta,
-                        'nombre_archivo': archivo.get('nombre', ''),
-                        'resumen': resumen,
-                        'entidades': entidades,
-                        'temas': [{'palabra': palabra, 'relevancia': relevancia} for palabra, relevancia in temas]
-                    }
-                    
-                    documentos.append(documento)
+                # Crear documento simple sin PLN
+                documento = {
+                    'texto': texto,
+                    'fecha': datetime.now().isoformat(),
+                    'ruta': ruta,
+                    'nombre_archivo': archivo.get('nombre', '')
+                }
                 
-                except Exception as e:
-                    print(f"Error al procesar {archivo.get('nombre')}: {e}")
-                    continue
-            
-            #pln.close()
+                documentos.append(documento)
         
         if not documentos:
             return jsonify({'success': False, 'error': 'No se pudieron procesar documentos'}), 400
@@ -578,6 +619,7 @@ def cargar_documentos_elastic():
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
 #--------------rutas de elasitcsearch - fin-------------
 @app.route('/admin')
 def admin():

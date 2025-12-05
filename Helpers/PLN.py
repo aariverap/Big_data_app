@@ -363,4 +363,62 @@ class PLN:
         # Los modelos de spaCy y transformers se liberan automáticamente
         # pero podemos agregar limpieza aquí si es necesario
         pass
+# Archivo: PLN.py
 
+# ... (código existente de la clase PLN) ...
+
+    def limpiar_texto_gaceta_ocr(self, texto: str) -> str:
+        """
+        Limpia el texto de artefactos comunes de OCR en las Gacetas (espacios extra, encabezados, tags).
+        
+        Args:
+            texto: Texto original del campo 'texto_completo'.
+            
+        Returns:
+            Texto limpio listo para procesamiento PLN.
+        """
+        # 1. Eliminar tags de imágenes y comentarios HTML (e.g., )
+        texto_limpio = re.sub(r'', ' ', texto, flags=re.DOTALL)
+        
+        # 2. Corregir palabras separadas por espacios excesivos (artefactos de OCR)
+        # Reemplaza 'C A M A R A' con 'CAMARA'. Buscamos más de un espacio entre caracteres
+        texto_limpio = re.sub(r'(\w)\s{2,}(\w)', r'\1\2', texto_limpio)
+        
+        # 3. Normalizar el texto de las Gacetas (Ej. A Ñ O -> AÑO)
+        # Esto soluciona la separación de letras con espacios, común en títulos de Gacetas
+        texto_limpio = re.sub(r'(?<!\s)(\s\w{1}\s)(?=\w)', r'\1', texto_limpio) # Eliminar solo espacios si son una sola letra rodeada de texto
+        
+        # Se necesita una segunda pasada más agresiva para títulos muy espaciados
+        texto_limpio = re.sub(r'(\w)\s{1}(\w)\s{1}(\w)\s{1}(\w)', r'\1\2\3\4', texto_limpio)
+        texto_limpio = re.sub(r'(\w)\s{1}(\w)', r'\1\2', texto_limpio)
+
+        # 4. Eliminar encabezados y pies de página comunes (texto que es irrelevante para el contenido legal)
+        # Se definen patrones de headers/footers/metadata
+        patrones_irrelevantes = [
+            r'AÑO\s+XXXIV\s+-\s+Nº\s+\d+', # AÑO XXXIV - Nº 1500
+            r'DIRECTORES?:?', # DIRECTORES
+            r'REPÚBLICA\s+DE\s+COLOMBIA',
+            r'Gaceta\s+del\s+Congreso',
+            r'SENADO\s+Y\s+CÁMARA\s+\(Artículo\s+36,\s+Ley\s+5ª\s+de\s+1992\)',
+            r'IMPRENTA\s+NACIONAL\s+DE\s+COLOMBIA\s+www\.imprenta\.gov\.co',
+            r'Bogotá,\s+D\.\s+C\.,\s+.*?\s+de\s+\d+', # Fecha
+            r'I\s+S\s+S\s+N\s+.*?\d+\s+-\s+\d+', # ISSN
+            r'EDICIÓN\s+DE\s+\d+\s+PÁGINAS',
+            r'SECRETARIO\s+GENERAL\s+DEL\s+SENADO\s+www\.secretariasenado\.gov\.co',
+            r'SECRETARIO\s+GENERAL\s+DE\s+LA\s+CÁMARA\s+www\.camara\.gov\.co',
+            r'RAMA\s+LEGISLATIVA\s+DEL\s+PODER\s+PÚBLICO',
+            r'\s*C\s+Á\s+M\s+A\s+R\s+A\s+D\s+E\s+R\s+E\s+P\s+R\s+E\s+S\s+E\s+N\s+T\s+A\s+N\s+T\s+E\s+S\s*', # Título de Corporación
+            r'##\s+C\s+O\s+N\s+T\s+E\s+N\s+I\s+D\s+O\s+Gaceta\s+número\s+\d+\s+-\s+.*' # Índice de contenido al final
+        ]
+        
+        # Eliminar los patrones, uno por uno
+        for patron in patrones_irrelevantes:
+            texto_limpio = re.sub(patron, ' ', texto_limpio, flags=re.IGNORECASE | re.DOTALL)
+
+        # 5. Normalizar espacios y saltos de línea restantes
+        texto_limpio = re.sub(r'\s+', ' ', texto_limpio).strip()
+        
+        # 6. Reemplazar encabezados de sección con un separador limpio (dos saltos de línea)
+        texto_limpio = re.sub(r'##\s*', '\n\n', texto_limpio)
+        
+        return texto_limpio

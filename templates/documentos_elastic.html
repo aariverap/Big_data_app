@@ -188,24 +188,29 @@
 
         // Cargar lista de índices
         function cargarIndices() {
-            fetch('/listar-indices-elastic')
-                .then(response => response.json())
-                .then(data => {
-                    const select = document.getElementById('select_index');
-                    select.innerHTML = '<option value="">Seleccione un índice</option>';
-                    
-                    data.forEach(indice => {
-                        const option = document.createElement('option');
-                        option.value = indice.nombre;
-                        option.textContent = `${indice.nombre} (${indice.total_documentos} docs)`;
-                        select.appendChild(option);
-                    });
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    document.getElementById('select_index').innerHTML = '<option value="">Error al cargar índices</option>';
-                });
-        }
+    fetch('/listar-indices-elastic')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('select_index');
+            select.innerHTML = '<option value="">Seleccione un índice</option>';
+
+            if (!data.success) {
+                select.innerHTML = '<option value="">Error al cargar índices</option>';
+                return;
+            }
+
+            (data.indices || []).forEach(indice => {
+                const option = document.createElement('option');
+                option.value = indice.nombre;
+                option.textContent = `${indice.nombre} (${indice.documentos} docs)`;
+                select.appendChild(option);
+            });
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('select_index').innerHTML = '<option value="">Error al cargar índices</option>';
+        });
+}
 
         // Procesar archivo ZIP
         function procesarZip() {

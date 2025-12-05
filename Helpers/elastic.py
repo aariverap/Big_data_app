@@ -1,393 +1,333 @@
 from elasticsearch import Elasticsearch
-from typing import Dict, List, Optional, Any
-import json
+import traceback
 
 class ElasticSearch:
-    def __init__(self, cloud_url: str, api_key: str):
-        """
-        Inicializa conexión a ElasticSearch Cloud
-        
-        Args:
-            cloud_url: URL del cluster de Elastic Cloud
-            api_key: API Key para autenticación
-        """
-        self.client = Elasticsearch(
-            cloud_url,
-            api_key=api_key,
-            verify_certs=True
-        )
-        
-    def test_connection(self) -> bool:
-        """Prueba la conexión a ElasticSearch"""
+    def __init__(self, cloud_url, api_key):
+        """Inicializar conexión a Elasticsearch"""
         try:
-            info = self.client.info()
-            print(f"✅ Conectado a Elastic: {info['version']['number']}")
-            return True
+            print(f"🔍 Intentando conectar a: {cloud_url[:50]}...")
+            self.es = Elasticsearch(
+                cloud_url,
+                api_key=api_key,
+                verify_certs=True,
+                request_timeout=30
+            )
+            print("✅ Elasticsearch inicializado correctamente")
         except Exception as e:
-            print(f"❌ Error al conectar con Elastic: {e}")
+            print(f"❌ Error al conectar con Elasticsearch: {e}")
+            traceback.print_exc()
+            self.es = None
+    
+    def test_connection(self):
+        """Verificar conexión"""
+        try:
+            if self.es and self.es.ping():
+                print("✅ Ping a Elasticsearch exitoso")
+                return True
+            print("❌ Ping a Elasticsearch falló")
+            return False
+        except Exception as e:
+            print(f"❌ Error en test_connection: {e}")
+            traceback.print_exc()
             return False
     
-    def ejecutar_comando(self, comando_json: str) -> Dict:
-        """
-        Ejecuta un comando JSON en ElasticSearch
+    def listar_indices(self):
+        """Listar todos los índices con debugging mejorado"""
+        print("\n" + "="*60)
+        print("🔍 INICIANDO listar_indices()")
+        print("="*60)
         
-        Args:
-            comando_json: Comando en formato JSON string
-            
-        Returns:
-            Resultado de la ejecución o error
-        """
         try:
-            comando = json.loads(comando_json)
+            # Verificar cliente
+            if not self.es:
+                print("❌ self.es es None - Cliente no inicializado")
+                return {
+                    'success': False,
+                    'error': 'Cliente de Elasticsearch no inicializado',
+                    'indices': []
+                }
             
-            # Extraer operación y parámetros
-            operacion = comando.get('operacion')
-            index = comando.get('index')
+            print("✅ Cliente de Elasticsearch existe")
             
-            if operacion == 'crear_index':
-                # Crear índice
-                mappings = comando.get('mappings', {})
-                settings = comando.get('settings', {})
+            # Verificar conexión
+            try:
+                if not self.es.ping():
+                    print("❌ Ping falló - Elasticsearch no responde")
+                    return {
+                        'success': False,
+                        'error': 'Elasticsearch no responde al ping',
+                        'indices': []
+                    }
+                print("✅ Ping exitoso")
+            except Exception as e:
+                print(f"❌ Error en ping: {e}")
+                return {
+                    'success': False,
+                    'error': f'Error de conexión: {str(e)}',
+                    'indices': []
+                }
+            
+            # Método 1: cat.indices
+            print("\n📋 Intentando método cat.indices...")
+            try:
+                indices_info = self.es.cat.indices(format='json')
+                print(f"✅ cat.indices devolvió {len(indices_info)} índices totales")
                 
-                response = self.client.indices.create(
-                    index=index,
-                    mappings=mappings,
-                    settings=settings
-                )
-                return {'success': True, 'data': response}
+                # Formatear y filtrar
+                indices = []
+                for idx in indices_info:
+                    nombre_indice = idx.get('index', '')
+                    print(f"   - Procesando: {nombre_indice}")
+                    
+                    # Filtrar índices del sistema
+                    if not nombre_indice.startswith('.'):
+                        indices.append({
+                            'nombre': nombre_indice,
+                            'salud': idx.get('health', 'unknown'),
+                            'estado': idx.get('status', 'unknown'),
+                            'documentos': idx.get('docs.count', '0'),
+                            'tamaño': idx.get('store.size', '0b')
+                        })
                 
-            elif operacion == 'eliminar_index':
-                # Eliminar índice
-                response = self.client.indices.delete(index=index)
-                return {'success': True, 'data': response}
+                print(f"✅ Devolviendo {len(indices)} índices de usuario")
                 
-            elif operacion == 'actualizar_mappings':
-                # Actualizar mappings
-                mappings = comando.get('mappings', {})
-                response = self.client.indices.put_mapping(
-                    index=index,
-                    body=mappings
-                )
-                return {'success': True, 'data': response}
+                if len(indices) == 0:
+                    print("⚠️  No se encontraron índices de usuario (todos son del sistema)")
+                    return {
+                        'success': True,
+                        'total': 0,
+                        'indices': [],
+                        'mensaje': 'No hay índices creados aún. Los índices del sistema están ocultos.'
+                    }
                 
-            elif operacion == 'info_index':
-                # Obtener información del índice
-                response = self.client.indices.get(index=index)
-                return {'success': True, 'data': response}
+                return {
+                    'success': True,
+                    'total': len(indices),
+                    'indices': indices
+                }
                 
-            elif operacion == 'listar_indices':
-                # Listar todos los índices
-                response = self.client.cat.indices(format='json')
-                return {'success': True, 'data': response}
+            except Exception as e1:
+                print(f"⚠️  cat.indices falló: {type(e1).__name__} - {str(e1)}")
+                traceback.print_exc()
                 
+                # Método 2: Fallback con indices.get_alias
+                print("\n📋 Intentando método alternativo indices.get_alias...")
+                try:
+                    indices_dict = self.es.indices.get_alias(index="*")
+                    print(f"✅ get_alias devolvió {len(indices_dict)} índices")
+                    
+                    indices = []
+                    for nombre_indice in indices_dict.keys():
+                        print(f"   - Procesando: {nombre_indice}")
+                        
+                        if not nombre_indice.startswith('.'):
+                            # Intentar obtener stats
+                            try:
+                                stats = self.es.indices.stats(index=nombre_indice)
+                                doc_count = stats['indices'][nombre_indice]['total']['docs']['count']
+                                size = stats['indices'][nombre_indice]['total']['store']['size_in_bytes']
+                                size_str = f"{size / (1024**2):.2f}mb" if size > 0 else "0b"
+                            except:
+                                doc_count = 0
+                                size_str = "unknown"
+                            
+                            indices.append({
+                                'nombre': nombre_indice,
+                                'salud': 'unknown',
+                                'estado': 'open',
+                                'documentos': str(doc_count),
+                                'tamaño': size_str
+                            })
+                    
+                    print(f"✅ Método alternativo devolvió {len(indices)} índices")
+                    
+                    if len(indices) == 0:
+                        return {
+                            'success': True,
+                            'total': 0,
+                            'indices': [],
+                            'mensaje': 'No hay índices creados aún'
+                        }
+                    
+                    return {
+                        'success': True,
+                        'total': len(indices),
+                        'indices': indices
+                    }
+                    
+                except Exception as e2:
+                    print(f"❌ Método alternativo también falló: {type(e2).__name__} - {str(e2)}")
+                    traceback.print_exc()
+                    raise e2
+            
+        except Exception as e:
+            print(f"\n❌ ERROR FATAL en listar_indices:")
+            print(f"   Tipo: {type(e).__name__}")
+            print(f"   Mensaje: {str(e)}")
+            traceback.print_exc()
+            
+            return {
+                'success': False,
+                'error': f'{type(e).__name__}: {str(e)}',
+                'indices': []
+            }
+        finally:
+            print("="*60)
+            print("FIN listar_indices()")
+            print("="*60 + "\n")
+    
+    def buscar(self, index, query, aggs=None, size=10):
+        """Realizar búsqueda en Elasticsearch"""
+        try:
+            if not self.es:
+                return {
+                    'success': False,
+                    'error': 'Cliente de Elasticsearch no inicializado',
+                    'total': 0,
+                    'resultados': [],
+                    'aggs': {}
+                }
+            
+            # Construir el cuerpo de la búsqueda
+            body = {"size": size}
+            
+            # Agregar query
+            if query and 'query' in query:
+                body['query'] = query['query']
             else:
-                return {'success': False, 'error': f'Operación no soportada: {operacion}'}
-                
-        except json.JSONDecodeError as e:
-            return {'success': False, 'error': f'JSON inválido: {str(e)}'}
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
-    
-    def crear_index(self, nombre_index: str, mappings: Dict = None, settings: Dict = None) -> bool:
-        """
-        Crea un nuevo índice
-        
-        Args:
-            nombre_index: Nombre del índice
-            mappings: Definición de campos (opcional)
-            settings: Configuración del índice (opcional)
-        """
-        try:
-            body = {}
-            if mappings:
-                body['mappings'] = mappings
-            if settings:
-                body['settings'] = settings
-                
-            self.client.indices.create(index=nombre_index, body=body)
-            return True
-        except Exception as e:
-            print(f"Error al crear índice: {e}")
-            return False
-    
-    def eliminar_index(self, nombre_index: str) -> bool:
-        """Elimina un índice"""
-        try:
-            self.client.indices.delete(index=nombre_index)
-            return True
-        except Exception as e:
-            print(f"Error al eliminar índice: {e}")
-            return False
-    
-    def listar_indices(self) -> List[Dict]:
-        """Lista todos los índices con información detallada"""
-        try:
-            indices = self.client.cat.indices(format='json', h='index,docs.count,store.size,health,status')
+                body['query'] = {"match_all": {}}
             
-            # Convertir a formato más legible
-            indices_formateados = []
-            for idx in indices:
-                indices_formateados.append({
-                    'nombre': idx.get('index', ''),
-                    'total_documentos': int(idx.get('docs.count', 0)) if idx.get('docs.count', '0').isdigit() else 0,
-                    'tamaño': idx.get('store.size', '0b'),
-                    'salud': idx.get('health', 'unknown'),
-                    'estado': idx.get('status', 'unknown')
+            # Agregar agregaciones si existen
+            if aggs:
+                body["aggs"] = aggs
+            
+            print(f"🔍 Ejecutando búsqueda en '{index}'")
+            
+            # Ejecutar búsqueda
+            result = self.es.search(index=index, body=body)
+            
+            # Formatear resultados
+            resultados = []
+            for hit in result['hits']['hits']:
+                resultados.append({
+                    '_id': hit['_id'],
+                    '_score': hit['_score'],
+                    '_source': hit['_source']
                 })
             
-            return indices_formateados
-        except Exception as e:
-            print(f"Error al listar índices: {e}")
-            return []
-    
-    def indexar_documento(self, index: str, documento: Dict, doc_id: str = None) -> bool:
-        """
-        Indexa un documento en ElasticSearch
-        
-        Args:
-            index: Nombre del índice
-            documento: Documento a indexar
-            doc_id: ID del documento (opcional)
-        """
-        try:
-            if doc_id:
-                self.client.index(index=index, id=doc_id, document=documento)
-            else:
-                self.client.index(index=index, document=documento)
-            return True
-        except Exception as e:
-            print(f"Error al indexar documento: {e}")
-            return False
-    
-    def indexar_bulk(self, index: str, documentos: List[Dict]) -> Dict:
-        """
-        Indexa múltiples documentos de forma masiva
-        
-        Args:
-            index: Nombre del índice
-            documentos: Lista de documentos a indexar
+            response = {
+                'success': True,
+                'total': result['hits']['total']['value'],
+                'resultados': resultados
+            }
             
-        Returns:
-            Diccionario con estadísticas de indexación
-        """
-        from elasticsearch.helpers import bulk
-        
+            # Agregar agregaciones si existen
+            if 'aggregations' in result:
+                response['aggs'] = result['aggregations']
+            
+            print(f"✅ Búsqueda completada: {response['total']} resultados")
+            return response
+            
+        except Exception as e:
+            print(f"❌ Error en buscar: {e}")
+            traceback.print_exc()
+            return {
+                'success': False,
+                'error': str(e),
+                'total': 0,
+                'resultados': [],
+                'aggs': {}
+            }
+    
+    def ejecutar_query(self, query_json):
+        """Ejecutar una query personalizada"""
         try:
-            # Preparar acciones para bulk
-            acciones = []
-            for doc in documentos:
-                accion = {
-                    '_index': index,
-                    '_source': doc
+            if not self.es:
+                return {'success': False, 'error': 'Cliente no inicializado'}
+            
+            import json
+            query = json.loads(query_json) if isinstance(query_json, str) else query_json
+            
+            index = query.pop('index', '_all')
+            result = self.es.search(index=index, body=query)
+            
+            return {'success': True, 'result': result}
+        except Exception as e:
+            print(f"❌ Error en ejecutar_query: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def indexar_bulk(self, index, documentos):
+        """Indexar múltiples documentos"""
+        try:
+            if not self.es:
+                return {
+                    'success': False,
+                    'error': 'Cliente no inicializado',
+                    'indexados': 0,
+                    'fallidos': len(documentos)
                 }
-                acciones.append(accion)
             
-            # Ejecutar bulk
-            success, failed = bulk(self.client, acciones, raise_on_error=False)
+            from elasticsearch.helpers import bulk
+            
+            actions = [
+                {"_index": index, "_source": doc}
+                for doc in documentos
+            ]
+            
+            print(f"📤 Indexando {len(actions)} documentos en '{index}'")
+            
+            success, failed = bulk(self.es, actions, raise_on_error=False)
+            
+            print(f"✅ Indexados: {success}, Fallidos: {len(failed) if failed else 0}")
             
             return {
                 'success': True,
                 'indexados': success,
-                'fallidos': len(failed) if failed else 0,
-                'errores': failed if failed else []
+                'fallidos': len(failed) if failed else 0
             }
         except Exception as e:
+            print(f"❌ Error en indexar_bulk: {e}")
             return {
                 'success': False,
-                'error': str(e)
+                'error': str(e),
+                'indexados': 0,
+                'fallidos': len(documentos)
             }
     
-    def buscar(self, index: str, query: Dict, aggs=None, size: int = 10) -> Dict:
-        """
-        Realiza una búsqueda en ElasticSearch
-        
-        Args:
-            index: Nombre del índice
-            query: Query de búsqueda (puede ser un dict completo con 'query' o solo la query)
-            aggs: Agregaciones a ejecutar (opcional)
-            size: Número de resultados
-        """
+    def crear_indice(self, nombre_indice, mapping=None):
+        """Crear un nuevo índice"""
         try:
-            # Construir el body de la búsqueda
-            body = query.copy() if query else {}
+            if not self.es:
+                return {'success': False, 'error': 'Cliente no inicializado'}
             
-            # Agregar las agregaciones al body si existen
-            if aggs:
-                body['aggs'] = aggs
+            if self.es.indices.exists(index=nombre_indice):
+                return {'success': False, 'error': f'El índice {nombre_indice} ya existe'}
             
-            # Ejecutar búsqueda
-            response = self.client.search(index=index, body=body, size=size)
+            body = {}
+            if mapping:
+                body['mappings'] = mapping
             
-            return {
-                'success': True,
-                'total': response['hits']['total']['value'],
-                'resultados': response['hits']['hits'],
-                'aggs': aggs
-            }
+            self.es.indices.create(index=nombre_indice, body=body)
+            print(f"✅ Índice '{nombre_indice}' creado")
+            
+            return {'success': True, 'mensaje': f'Índice {nombre_indice} creado correctamente'}
         except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
-    
-    def ejecutar_query(self, query_json: str) -> Dict:
-        """
-        Ejecuta una query en ElasticSearch
-        
-        Args:
-            query_json: Query en formato JSON string
-            
-        Returns:
-            Resultado de la búsqueda con hits y aggregations
-        """
-        try:
-            import json
-            query = json.loads(query_json)
-            
-            # Si la query tiene 'index' específico, extraerlo
-            index = query.pop('index', '_all')
-            
-            # Ejecutar búsqueda
-            response = self.client.search(index=index, body=query)
-            
-            return {
-                'success': True,
-                'total': response['hits']['total']['value'],
-                'hits': response['hits']['hits'],
-                'aggs': response.get('aggregations', {})
-            }
-        except json.JSONDecodeError as e:
-            return {'success': False, 'error': f'JSON inválido: {str(e)}'}
-        except Exception as e:
+            print(f"❌ Error en crear_indice: {e}")
             return {'success': False, 'error': str(e)}
     
-    def ejecutar_dml(self, comando_json: str) -> Dict:
-        """
-        Ejecuta un comando DML (Data Manipulation Language) en ElasticSearch
-        Permite ejecutar comandos como index, update, delete directamente
-        
-        Args:
-            comando_json: Comando DML en formato JSON string
-            
-        Returns:
-            Resultado de la ejecución
-        """
+    def eliminar_indice(self, nombre_indice):
+        """Eliminar un índice"""
         try:
-            import json
-            comando = json.loads(comando_json)
+            if not self.es:
+                return {'success': False, 'error': 'Cliente no inicializado'}
             
-            operacion = comando.get('operacion')
+            if not self.es.indices.exists(index=nombre_indice):
+                return {'success': False, 'error': f'El índice {nombre_indice} no existe'}
             
-            if operacion == 'index' or operacion == 'create':
-                # Indexar documento
-                index = comando.get('index')
-                documento = comando.get('documento', comando.get('body', {}))
-                doc_id = comando.get('id')
-                
-                if doc_id:
-                    response = self.client.index(index=index, id=doc_id, document=documento)
-                else:
-                    response = self.client.index(index=index, document=documento)
-                
-                return {'success': True, 'data': response}
-                
-            elif operacion == 'update':
-                # Actualizar documento
-                index = comando.get('index')
-                doc_id = comando.get('id')
-                doc = comando.get('doc', comando.get('documento', {}))
-                
-                response = self.client.update(index=index, id=doc_id, doc=doc)
-                return {'success': True, 'data': response}
-                
-            elif operacion == 'delete':
-                # Eliminar documento
-                index = comando.get('index')
-                doc_id = comando.get('id')
-                
-                response = self.client.delete(index=index, id=doc_id)
-                return {'success': True, 'data': response}
-                
-            elif operacion == 'delete_by_query':
-                # Eliminar por query
-                index = comando.get('index')
-                query = comando.get('query', {})
-                
-                response = self.client.delete_by_query(index=index, body={'query': query})
-                return {'success': True, 'data': response}
-                
-            else:
-                return {'success': False, 'error': f'Operación DML no soportada: {operacion}'}
-                
-        except json.JSONDecodeError as e:
-            return {'success': False, 'error': f'JSON inválido: {str(e)}'}
+            self.es.indices.delete(index=nombre_indice)
+            print(f"✅ Índice '{nombre_indice}' eliminado")
+            
+            return {'success': True, 'mensaje': f'Índice {nombre_indice} eliminado correctamente'}
         except Exception as e:
+            print(f"❌ Error en eliminar_indice: {e}")
             return {'success': False, 'error': str(e)}
-    
-    def buscar_texto(self, index: str, texto: str, campos: List[str] = None, size: int = 10) -> Dict:
-        """
-        Búsqueda simple de texto en campos específicos
-        
-        Args:
-            index: Nombre del índice
-            texto: Texto a buscar
-            campos: Lista de campos donde buscar (si es None, busca en todos)
-            size: Número de resultados
-        """
-        try:
-            if campos:
-                query = {
-                    "query": {
-                        "multi_match": {
-                            "query": texto,
-                            "fields": campos,
-                            "type": "best_fields"
-                        }
-                    }
-                }
-            else:
-                query = {
-                    "query": {
-                        "query_string": {
-                            "query": texto
-                        }
-                    }
-                }
-            
-            return self.buscar(index, query, size)
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
-    
-    def obtener_documento(self, index: str, doc_id: str) -> Optional[Dict]:
-        """Obtiene un documento por su ID"""
-        try:
-            response = self.client.get(index=index, id=doc_id)
-            return response['_source']
-        except Exception as e:
-            print(f"Error al obtener documento: {e}")
-            return None
-    
-    def actualizar_documento(self, index: str, doc_id: str, datos: Dict) -> bool:
-        """Actualiza un documento existente"""
-        try:
-            self.client.update(index=index, id=doc_id, doc=datos)
-            return True
-        except Exception as e:
-            print(f"Error al actualizar documento: {e}")
-            return False
-    
-    def eliminar_documento(self, index: str, doc_id: str) -> bool:
-        """Elimina un documento"""
-        try:
-            self.client.delete(index=index, id=doc_id)
-            return True
-        except Exception as e:
-            print(f"Error al eliminar documento: {e}")
-            return False
-    
-    def close(self):
-        """Cierra la conexión"""
-        self.client.close()
